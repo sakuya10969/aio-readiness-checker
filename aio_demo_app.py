@@ -108,7 +108,9 @@ if st.button("診断する"):
     st.subheader("診断結果")
     st.dataframe(df)
 
-    st.subheader("自動示唆（簡易版）")
+    # ここから下を差し替え
+
+    st.subheader("自動示唆（詳細版）")
     for row in results:
         if row["ステータス"] != "OK":
             st.markdown(
@@ -117,27 +119,86 @@ if st.button("診断する"):
             )
             continue
 
-    suggestions = []
-    if row["回答性"] < 60:
-        suggestions.append(
-            "・テキスト量が不足しています。FAQやHowTo、詳細説明を追加し、ユーザーの質問に1ページで答えきれる構成にしましょう。"
-        )
-    if row["構造化"] < 80:
-        suggestions.append(
-            "・構造化データ（schema.org, FAQPage, Product等）と見出しタグ（H1/H2）を整備し、AI・検索エンジンが理解しやすいページにしましょう。"
-        )
-    if row["FAQ/HowTo"] < 60:
-        suggestions.append(
-            "・「よくある質問」「使い方」などのFAQ/HowToコンテンツを拡充し、会話型AIから引用されやすい情報を増やしましょう。"
-        )
-    if row["ブランド性"] < 60:
-        suggestions.append(
-            "・ブランド名・商品名をページ内で適切に言及し、ブランド指名検索からの評価を高めましょう。"
-        )
+        # 1) スコアサマリー表
+        scores = {
+            "回答性": row["回答性"],
+            "構造化": row["構造化"],
+            "FAQ/HowTo": row["FAQ/HowTo"],
+            "ブランド性": row["ブランド性"],
+        }
 
-    if not suggestions:
-        suggestions.append(
-            "・AIO観点で一定水準を満たしています。重要キーワードごとに同様の構成のページを増やすとさらに効果が期待できます。"
-        )
+        def level(score: int) -> str:
+            if score >= 80:
+                return "良好"
+            if score >= 60:
+                return "要改善"
+            return "優先改善"
 
-    st.markdown(f"### {row['URL']}\n" + "\n".join(suggestions))
+        def priority(score: int) -> str:
+            if score >= 80:
+                return "低"
+            if score >= 60:
+                return "中"
+            return "高"
+
+        st.markdown(f"### {row['URL']}")
+        table_lines = ["| 観点 | スコア | 評価 | 優先度 |", "| --- | --- | --- | --- |"]
+        for k, v in scores.items():
+            table_lines.append(f"| {k} | {v} | {level(v)} | {priority(v)} |")
+        st.markdown("\n".join(table_lines))
+
+        # 2) 観点別の詳細示唆
+        blocks = []
+
+        # 回答性
+        if row["回答性"] < 80:
+            text_block = [
+                "#### 1. 回答性（ユーザーの質問にどこまで答えられているか）",
+                "",
+                "- 主要な検索ニーズ（「◯◯とは」「◯◯ やり方」「◯◯ 比較」など）に対して、1ページ内で完結して答えられる構成にする。",
+                "- 導入文 → 結論 → 詳細解説 → 具体例 → FAQ の順で、情報の深さを段階的に追加する。",
+                "- 重要キーワードごとに見出し（H2/H3）を立て、各見出し内で1テーマ1メッセージに絞って解説する。",
+            ]
+            blocks.append("\n".join(text_block))
+
+        # 構造化
+        if row["構造化"] < 80:
+            text_block = [
+                "#### 2. 構造化・技術的な分かりやすさ",
+                "",
+                "- schema.org の構造化データ（FAQPage, Article, Product など）を追加し、AI・検索エンジンが情報を機械的に読み取りやすい状態にする。",
+                "- H1 はページ全体のテーマを端的に表す1文にし、H2/H3 で論点を階層的に整理する。",
+                "- 箇条書き・番号リスト・表などを使い、長文が続かないように視認性を高める。",
+            ]
+            blocks.append("\n".join(text_block))
+
+        # FAQ / HowTo
+        if row["FAQ/HowTo"] < 80:
+            text_block = [
+                "#### 3. FAQ / HowTo コンテンツ",
+                "",
+                "- 実際に問い合わせが来ている内容や、営業現場でよく聞かれる質問を洗い出し、そのまま Q&A 化する。",
+                "- 「初めての人がつまずくポイント」を想像し、ステップ付きの手順（HowTo）として整理する。",
+                "- 1質問1回答で、結論→理由→補足 の順に書くことで、会話型AIから引用されやすい形にする。",
+            ]
+            blocks.append("\n".join(text_block))
+
+        # ブランド性
+        if row["ブランド性"] < 80:
+            text_block = [
+                "#### 4. ブランド性・信頼性",
+                "",
+                "- ページ上部でブランド名・サービス名を明示し、「誰が」「何を提供しているページか」をはっきりさせる。",
+                "- 受賞歴・導入実績・お客様の声など、信頼を補強する情報を一箇所にまとめて掲載する。",
+                "- 会社概要や運営者情報への導線をフッターや本文内に設置し、安心して問い合わせできる状態にする。",
+            ]
+            blocks.append("\n".join(text_block))
+
+        if not blocks:
+            blocks.append(
+                "#### 総評\n\n"
+                "AIO 観点で一定水準を満たしています。重要キーワードごとに同様の構成のページを増やし、"
+                "FAQ・事例・比較コンテンツを横展開すると、AI検索からの評価をさらに高められます。"
+            )
+
+        st.markdown("\n\n".join(blocks))
