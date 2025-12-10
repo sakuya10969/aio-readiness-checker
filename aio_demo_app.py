@@ -132,4 +132,4 @@ if st.button("診断する"):
             )
         if row["ブランド性"] < 60:
             suggestions.append(
-                "・ブラ
+                "・ブランド名・商品名をページ内で適切に言及し、"
