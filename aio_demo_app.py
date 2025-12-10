@@ -7,31 +7,56 @@ import pandas as pd
 from openai import OpenAI
 
 
-def analyze_page_with_llm(api_key: str, url: str, page_text: str) -> str:
-    """ページ本文をLLMに読ませて詳細診断を生成する"""
+def analyze_page_with_llm(api_key: str, url: str, page_text: str, scores: dict) -> str:
+    """ページ本文とスコアをLLMに渡して、構造化された示唆を生成する"""
     client = OpenAI(api_key=api_key)
 
     prompt = f"""
-あなたはプロのWebコンサルタントです。
-以下のURLとページ内容を読み、AIO観点から具体的に改善点を出してください。
+あなたはプロのWebマーケティングコンサルタントです。
+以下のURLとページ内容、診断スコアをもとに、AIO（AI検索・エージェント時代）の観点から
+構造化された改善提案レポートを日本語で作成してください。
 
-【出す内容】
-1. ページ全体の総評（100字）
-2. 具体的な改善すべき箇所（ページ内のどの部分を直すか、箇条書きで5つ）
-3. セクション別改善案（ファーストビュー / 見出し / 本文 / 事例 / FAQ / CTA）
-4. 最優先で直すべき3点（理由つき）
+【診断スコア】
+- 回答性: {scores.get("回答性")}
+- 構造化: {scores.get("構造化")}
+- FAQ/HowTo: {scores.get("FAQ/HowTo")}
+- ブランド性: {scores.get("ブランド性")}
+
+【レポート構成（必ずこの順・見出しで）】
+### 1. 回答性（ユーザーの質問にどこまで答えられているか）
+- 現状評価（2〜3行）
+- 改善すべき具体的なポイントを箇条書きで3〜5個
+- 特にAIO時代に重要になる理由を1〜2行でコメント
+
+### 2. 構造化・技術的な分かりやすさ
+（同じく：現状評価 → 箇条書き改善案 → なぜ重要か）
+
+### 3. FAQ / HowTo コンテンツ
+（同じ構成）
+
+### 4. ブランド性・信頼性
+（同じ構成）
+
+### 5. 最優先で着手すべき改善3つ
+- 箇条書きで「施策名：理由」の形式で3つ
+
+【出力フォーマットの条件】
+- Markdownで出力する
+- 箇条書きは - を使う
+- 1つ1つの指摘は「どの部分をどう直すか」が分かるレベルまで具体的に書く
+- 文体は「です・ます調」で簡潔に
 
 --- URL ---
 {url}
 
---- Page Text（内容） ---
+--- Page Text（内容。長文のため一部のみ） ---
 {page_text[:8000]}
 """
 
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
+        temperature=0.3,
     )
 
     return response.choices[0].message.content
@@ -180,9 +205,9 @@ if st.button("診断する"):
     )
 
     # -------------------------
-    # ここから自動示唆＋LLM詳細診断
+    # ここから自動示唆（全部AI生成）
     # -------------------------
-    st.subheader("自動示唆（詳細版）")
+    st.subheader("自動示唆（AI生成レポート）")
     for row in results:
         if row["ステータス"] != "OK":
             st.markdown(
@@ -191,7 +216,9 @@ if st.button("診断する"):
             )
             continue
 
-        # 1) スコアサマリー表
+        st.markdown(f"### {row['URL']}")
+
+        # 1) スコアサマリー表（これはそのまま）
         scores = {
             "回答性": row["回答性"],
             "構造化": row["構造化"],
@@ -213,77 +240,18 @@ if st.button("診断する"):
                 return "中"
             return "高"
 
-        st.markdown(f"### {row['URL']}")
         table_lines = ["| 観点 | スコア | 評価 | 優先度 |", "| --- | --- | --- | --- |"]
         for k, v in scores.items():
             table_lines.append(f"| {k} | {v} | {level(v)} | {priority(v)} |")
         st.markdown("\n".join(table_lines))
 
-        # 2) 観点別の詳細示唆（ルールベース）
-        blocks = []
-
-        # 回答性
-        if row["回答性"] < 80:
-            text_block = [
-                "#### 1. 回答性（ユーザーの質問にどこまで答えられているか）",
-                "",
-                "- 主要な検索ニーズ（「◯◯とは」「◯◯ やり方」「◯◯ 比較」など）に対して、1ページ内で完結して答えられる構成にする。",
-                "- 導入文 → 結論 → 詳細解説 → 具体例 → FAQ の順で、情報の深さを段階的に追加する。",
-                "- 重要キーワードごとに見出し（H2/H3）を立て、各見出し内で1テーマ1メッセージに絞って解説する。",
-            ]
-            blocks.append("\n".join(text_block))
-
-        # 構造化
-        if row["構造化"] < 80:
-            text_block = [
-                "#### 2. 構造化・技術的な分かりやすさ",
-                "",
-                "- schema.org の構造化データ（FAQPage, Article, Product など）を追加し、AI・検索エンジンが情報を機械的に読み取りやすい状態にする。",
-                "- H1 はページ全体のテーマを端的に表す1文にし、H2/H3 で論点を階層的に整理する。",
-                "- 箇条書き・番号リスト・表などを使い、長文が続かないように視認性を高める。",
-            ]
-            blocks.append("\n".join(text_block))
-
-        # FAQ / HowTo
-        if row["FAQ/HowTo"] < 80:
-            text_block = [
-                "#### 3. FAQ / HowTo コンテンツ",
-                "",
-                "- 実際に問い合わせが来ている内容や、営業現場でよく聞かれる質問を洗い出し、そのまま Q&A 化する。",
-                "- 「初めての人がつまずくポイント」を想像し、ステップ付きの手順（HowTo）として整理する。",
-                "- 1質問1回答で、結論→理由→補足 の順に書くことで、会話型AIから引用されやすい形にする。",
-            ]
-            blocks.append("\n".join(text_block))
-
-        # ブランド性
-        if row["ブランド性"] < 80:
-            text_block = [
-                "#### 4. ブランド性・信頼性",
-                "",
-                "- ページ上部でブランド名・サービス名を明示し、「誰が」「何を提供しているページか」をはっきりさせる。",
-                "- 受賞歴・導入実績・お客様の声など、信頼を補強する情報を一箇所にまとめて掲載する。",
-                "- 会社概要や運営者情報への導線をフッターや本文内に設置し、安心して問い合わせできる状態にする。",
-            ]
-            blocks.append("\n".join(text_block))
-
-        if not blocks:
-            blocks.append(
-                "#### 総評\n\n"
-                "AIO 観点で一定水準を満たしています。重要キーワードごとに同様の構成のページを増やし、"
-                "FAQ・事例・比較コンテンツを横展開すると、AI検索からの評価をさらに高められます。"
-            )
-
-        st.markdown("\n\n".join(blocks))
-
-        # 3) 🔍 LLM によるページ内容の詳細診断
-        st.markdown("### 🔍 ページ内容に基づく詳細診断（LLM解析）")
-
+        # 2) このURL専用の改善レポートをLLMに書かせる
         if openai_api_key:
-            llm_result = analyze_page_with_llm(
-                openai_api_key, row["URL"], row.get("本文", "")
+            llm_report = analyze_page_with_llm(
+                openai_api_key, row["URL"], row.get("本文", ""), scores
             )
-            st.markdown(llm_result)
+            st.markdown(llm_report)
         else:
             st.info(
-                "OpenAI API Key を入力すると、このページ内容を読み込んだ詳細診断が表示されます。"
+                "OpenAI API Key を入力すると、このページ内容とスコアに基づいた詳細な改善レポートが表示されます。"
             )
