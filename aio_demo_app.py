@@ -117,20 +117,27 @@ if st.button("診断する"):
             )
             continue
 
-        suggestions = []
-        if row["回答性"] < 60:
-            suggestions.append(
-                "・テキスト量が不足しています。FAQやHowTo、詳細説明を追加し、ユーザーの質問に1ページで答えきれる構成にしましょう。"
-            )
-        if row["構造化"] < 80:
-            suggestions.append(
-                "・構造化データ（schema.org, FAQPage, Product等）と見出しタグ（H1/H2）を整備し、AI・検索エンジンが理解しやすいページにしましょう。"
-            )
-        if row["FAQ/HowTo"] < 60:
-            suggestions.append(
-                "・「よくある質問」「使い方」などのFAQ/HowToコンテンツを拡充し、会話型AIから引用されやすい情報を増やしましょう。"
-            )
-        if row["ブランド性"] < 60:
-    suggestions.append(
-        "・ブランド名・商品名をページ内で適切に言及し、ブランド指名検索からの評価を高めましょう。"
-    )
+    suggestions = []
+    if row["回答性"] < 60:
+        suggestions.append(
+            "・テキスト量が不足しています。FAQやHowTo、詳細説明を追加し、ユーザーの質問に1ページで答えきれる構成にしましょう。"
+        )
+    if row["構造化"] < 80:
+        suggestions.append(
+            "・構造化データ（schema.org, FAQPage, Product等）と見出しタグ（H1/H2）を整備し、AI・検索エンジンが理解しやすいページにしましょう。"
+        )
+    if row["FAQ/HowTo"] < 60:
+        suggestions.append(
+            "・「よくある質問」「使い方」などのFAQ/HowToコンテンツを拡充し、会話型AIから引用されやすい情報を増やしましょう。"
+        )
+    if row["ブランド性"] < 60:
+        suggestions.append(
+            "・ブランド名・商品名をページ内で適切に言及し、ブランド指名検索からの評価を高めましょう。"
+        )
+
+    if not suggestions:
+        suggestions.append(
+            "・AIO観点で一定水準を満たしています。重要キーワードごとに同様の構成のページを増やすとさらに効果が期待できます。"
+        )
+
+    st.markdown(f"### {row['URL']}\n" + "\n".join(suggestions))
