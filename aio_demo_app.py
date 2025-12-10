@@ -4,12 +4,51 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import pandas as pd
 
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 
 
+# ===== 重要部分だけ抽出する関数（方法1） =====
+def extract_important_sections(soup: BeautifulSoup) -> str:
+    """
+    ページの重要部分（見出しとその直後の段落）だけを抽出して返す。
+    AIO観点で意味のある情報だけに絞ることで、トークン数とコストを削減する。
+    """
+    parts = []
+
+    # H1
+    h1 = soup.find("h1")
+    if h1:
+        parts.append(f"[H1] {h1.get_text(strip=True)}")
+        p = h1.find_next_sibling("p")
+        if p:
+            parts.append(f"- {p.get_text(strip=True)}")
+
+    # H2 / H3
+    for tag in soup.find_all(["h2", "h3"]):
+        heading = tag.get_text(strip=True)
+        parts.append(f"[{tag.name.upper()}] {heading}")
+
+        # 見出し直後の段落を取得
+        p = tag.find_next_sibling("p")
+        if p:
+            parts.append(f"- {p.get_text(strip=True)}")
+
+    # 何も取れなかった場合のフォールバック
+    if not parts:
+        body_text = soup.get_text(separator=" ", strip=True)
+        return body_text[:3000]
+
+    # まとめて返す（最後に長さを制限）
+    return "\n".join(parts)[:3000]
+
+
+# ===== LLM による詳細診断 =====
 def analyze_page_with_llm(api_key: str, url: str, page_text: str, scores: dict) -> str:
-    """ページ本文とスコアをLLMに渡して、構造化された示唆を生成する"""
+    """重要部分とスコアをLLMに渡して、構造化された示唆レポートを生成する"""
     client = OpenAI(api_key=api_key)
+
+    # 念のためダブルで長さ制限
+    short_text = page_text[:3000]
 
     prompt = f"""
 あなたはプロのWebマーケティングコンサルタントです。
@@ -49,19 +88,35 @@ def analyze_page_with_llm(api_key: str, url: str, page_text: str, scores: dict) 
 --- URL ---
 {url}
 
---- Page Text（内容。長文のため一部のみ） ---
-{page_text[:8000]}
+--- Page Text（重要部分のみ） ---
+{short_text}
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+        return response.choices[0].message.content
 
-    return response.choices[0].message.content
+    except RateLimitError:
+        # レートリミットに当たってもアプリを落とさずメッセージを返す
+        return (
+            "#### ※API利用上限に達しました\n\n"
+            "- OpenAI API のレート制限／利用上限に達している可能性があります。\n"
+            "- しばらく時間をおいて再度お試しください。\n"
+            "- 継続利用する場合は、OpenAIダッシュボードの Usage / Billing からクレジット残高をご確認ください。"
+        )
+    except Exception as e:
+        return (
+            "#### ※AI詳細診断でエラーが発生しました\n\n"
+            f"- エラー内容: {e}\n"
+            "- プロンプトや入力内容を見直すか、時間をおいて再度お試しください。"
+        )
 
 
+# ===== Streamlit アプリ本体 =====
 st.set_page_config(page_title="AIO Readiness Checker Demo", layout="wide")
 
 st.title("AIO Readiness Checker（デモ版）")
@@ -109,16 +164,19 @@ if st.button("診断する"):
                     "構造化": 0,
                     "FAQ/HowTo": 0,
                     "ブランド性": 0,
-                    "本文": "",
+                    "本文要約": "",
                 }
             )
             continue
 
-        # ページ本文を抽出
-        text = soup.get_text(separator=" ", strip=True)
-        text_len = len(text)
+        # ページ本文（全文）
+        full_text = soup.get_text(separator=" ", strip=True)
+        text_len = len(full_text)
 
-        # 回答性（テキスト量）
+        # AIO観点で重要な部分だけ抽出（見出し＋直後の段落）
+        important_text = extract_important_sections(soup)
+
+        # 回答性（テキスト量）は全文ベースで判定
         if text_len > 8000:
             ans_score = 100
         elif text_len > 4000:
@@ -139,16 +197,16 @@ if st.button("診断する"):
         if has_h1:
             struct_score += 20
 
-        # FAQ / HowTo キーワード
+        # FAQ / HowTo キーワード（これも全文で判定）
         keywords = ["よくある質問", "FAQ", "Q&A", "質問", "How to", "使い方"]
         faq_score = 20
-        if any(k.lower() in text.lower() for k in keywords):
+        if any(k.lower() in full_text.lower() for k in keywords):
             faq_score = 80
 
         # ブランド性（ドメイン由来のキーワード頻度）
         hostname = urlparse(url).hostname or ""
         brand_token = hostname.split(".")[0]
-        brand_count = text.lower().count(brand_token.lower()) if brand_token else 0
+        brand_count = full_text.lower().count(brand_token.lower()) if brand_token else 0
         if brand_count > 30:
             brand_score = 100
         elif brand_count > 10:
@@ -177,21 +235,21 @@ if st.button("診断する"):
                 "構造化": struct_score,
                 "FAQ/HowTo": faq_score,
                 "ブランド性": brand_score,
-                "本文": text,  # LLM用に本文も保存
+                "本文要約": important_text,  # LLM にはこちらを渡す
             }
         )
 
-    # 結果テーブル（本文列は隠す）
+    # 結果テーブル（本文要約列は隠す）
     df = pd.DataFrame(results)
-    if "本文" in df.columns:
-        df_display = df.drop(columns=["本文"])
+    if "本文要約" in df.columns:
+        df_display = df.drop(columns=["本文要約"])
     else:
         df_display = df
 
     st.subheader("診断結果")
     st.dataframe(df_display)
 
-    # 指標ごとのAIO観点での意味づけ（小さめの説明）
+    # 指標ごとのAIO観点での意味づけ
     st.markdown(
         """
 ##### 各指標の意味（AIO時代における重要性）
@@ -205,7 +263,7 @@ if st.button("診断する"):
     )
 
     # -------------------------
-    # ここから自動示唆（全部AI生成）
+    # ここから自動示唆（スコア＋AIレポート）
     # -------------------------
     st.subheader("自動示唆（AI生成レポート）")
     for row in results:
@@ -218,7 +276,7 @@ if st.button("診断する"):
 
         st.markdown(f"### {row['URL']}")
 
-        # 1) スコアサマリー表（これはそのまま）
+        # 1) スコアサマリー表
         scores = {
             "回答性": row["回答性"],
             "構造化": row["構造化"],
@@ -248,7 +306,7 @@ if st.button("診断する"):
         # 2) このURL専用の改善レポートをLLMに書かせる
         if openai_api_key:
             llm_report = analyze_page_with_llm(
-                openai_api_key, row["URL"], row.get("本文", ""), scores
+                openai_api_key, row["URL"], row.get("本文要約", ""), scores
             )
             st.markdown(llm_report)
         else:
