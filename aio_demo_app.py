@@ -6,7 +6,9 @@ import pandas as pd
 
 from openai import OpenAI
 
-def analyze_page_with_llm(api_key, url, page_text):
+
+def analyze_page_with_llm(api_key: str, url: str, page_text: str) -> str:
+    """ページ本文をLLMに読ませて詳細診断を生成する"""
     client = OpenAI(api_key=api_key)
 
     prompt = f"""
@@ -29,18 +31,27 @@ def analyze_page_with_llm(api_key, url, page_text):
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.4
+        temperature=0.4,
     )
 
-    return response.choices[0].message["content"]
+    return response.choices[0].message.content
+
 
 st.set_page_config(page_title="AIO Readiness Checker Demo", layout="wide")
 
 st.title("AIO Readiness Checker（デモ版）")
+
 # OpenAI API Key 入力欄
-openai_api_key = st.text_input("OpenAI API Key を入力してください（ページ内容の詳細診断に必要）", type="password")
+openai_api_key = st.text_input(
+    "OpenAI API Key を入力してください（ページ内容の詳細診断に必要）",
+    type="password",
+)
+
 if not openai_api_key:
-    st.info("OpenAI API Key を入力すると、ページ内容を読んだ高度な診断が表示されます。")
+    st.info(
+        "※ API Key を入れない場合は、通常のスコア診断のみ表示されます。"
+        "詳細診断（どの部分をどう直すかの具体診断）は表示されません。"
+    )
 
 st.write("URLを入力すると、AI検索時代のコンテンツ適性を簡易スコアリングします。")
 
@@ -73,13 +84,16 @@ if st.button("診断する"):
                     "構造化": 0,
                     "FAQ/HowTo": 0,
                     "ブランド性": 0,
+                    "本文": "",
                 }
             )
             continue
 
+        # ページ本文を抽出
         text = soup.get_text(separator=" ", strip=True)
         text_len = len(text)
 
+        # 回答性（テキスト量）
         if text_len > 8000:
             ans_score = 100
         elif text_len > 4000:
@@ -91,6 +105,7 @@ if st.button("診断する"):
         else:
             ans_score = 20
 
+        # 構造化データ / 見出し
         has_ld = bool(soup.find("script", {"type": "application/ld+json"}))
         has_h1 = bool(soup.find("h1"))
         struct_score = 50
@@ -99,16 +114,16 @@ if st.button("診断する"):
         if has_h1:
             struct_score += 20
 
+        # FAQ / HowTo キーワード
         keywords = ["よくある質問", "FAQ", "Q&A", "質問", "How to", "使い方"]
         faq_score = 20
         if any(k.lower() in text.lower() for k in keywords):
             faq_score = 80
 
+        # ブランド性（ドメイン由来のキーワード頻度）
         hostname = urlparse(url).hostname or ""
         brand_token = hostname.split(".")[0]
-        brand_count = (
-            text.lower().count(brand_token.lower()) if brand_token else 0
-        )
+        brand_count = text.lower().count(brand_token.lower()) if brand_token else 0
         if brand_count > 30:
             brand_score = 100
         elif brand_count > 10:
@@ -120,6 +135,7 @@ if st.button("診断する"):
         else:
             brand_score = 20
 
+        # 総合スコア
         total = round(
             0.35 * ans_score
             + 0.25 * struct_score
@@ -136,15 +152,36 @@ if st.button("診断する"):
                 "構造化": struct_score,
                 "FAQ/HowTo": faq_score,
                 "ブランド性": brand_score,
+                "本文": text,  # LLM用に本文も保存
             }
         )
 
+    # 結果テーブル（本文列は隠す）
     df = pd.DataFrame(results)
+    if "本文" in df.columns:
+        df_display = df.drop(columns=["本文"])
+    else:
+        df_display = df
+
     st.subheader("診断結果")
-    st.dataframe(df)
+    st.dataframe(df_display)
 
-    # ここから下を差し替え
+    # 指標ごとのAIO観点での意味づけ（小さめの説明）
+    st.markdown(
+        """
+##### 各指標の意味（AIO時代における重要性）
 
+- **総合スコア**：下記4つの観点を総合した「AI検索時代にどれだけ対応できているか」の目安です。
+- **回答性**：ユーザーの質問に1ページで答え切れているか。会話型AIが引用する際の“答えの質”に直結します。
+- **構造化**：見出し構造や構造化データの整備度。AIや検索エンジンがページ内容を機械的に理解できるかを左右します。
+- **FAQ/HowTo**：Q&Aや手順コンテンツの充実度。LLMが回答生成時に最も参照しやすい形式であり、AI推奨に乗りやすい領域です。
+- **ブランド性**：ブランド名・実績・運営情報などの明示度。AIが「信頼できる情報源」と判断するかどうかに関わる指標です。
+"""
+    )
+
+    # -------------------------
+    # ここから自動示唆＋LLM詳細診断
+    # -------------------------
     st.subheader("自動示唆（詳細版）")
     for row in results:
         if row["ステータス"] != "OK":
@@ -182,7 +219,7 @@ if st.button("診断する"):
             table_lines.append(f"| {k} | {v} | {level(v)} | {priority(v)} |")
         st.markdown("\n".join(table_lines))
 
-        # 2) 観点別の詳細示唆
+        # 2) 観点別の詳細示唆（ルールベース）
         blocks = []
 
         # 回答性
@@ -237,3 +274,16 @@ if st.button("診断する"):
             )
 
         st.markdown("\n\n".join(blocks))
+
+        # 3) 🔍 LLM によるページ内容の詳細診断
+        st.markdown("### 🔍 ページ内容に基づく詳細診断（LLM解析）")
+
+        if openai_api_key:
+            llm_result = analyze_page_with_llm(
+                openai_api_key, row["URL"], row.get("本文", "")
+            )
+            st.markdown(llm_result)
+        else:
+            st.info(
+                "OpenAI API Key を入力すると、このページ内容を読み込んだ詳細診断が表示されます。"
+            )
