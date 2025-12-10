@@ -4,9 +4,44 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import pandas as pd
 
+from openai import OpenAI
+
+def analyze_page_with_llm(api_key, url, page_text):
+    client = OpenAI(api_key=api_key)
+
+    prompt = f"""
+あなたはプロのWebコンサルタントです。
+以下のURLとページ内容を読み、AIO観点から具体的に改善点を出してください。
+
+【出す内容】
+1. ページ全体の総評（100字）
+2. 具体的な改善すべき箇所（ページ内のどの部分を直すか、箇条書きで5つ）
+3. セクション別改善案（ファーストビュー / 見出し / 本文 / 事例 / FAQ / CTA）
+4. 最優先で直すべき3点（理由つき）
+
+--- URL ---
+{url}
+
+--- Page Text（内容） ---
+{page_text[:8000]}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.4
+    )
+
+    return response.choices[0].message["content"]
+
 st.set_page_config(page_title="AIO Readiness Checker Demo", layout="wide")
 
 st.title("AIO Readiness Checker（デモ版）")
+# OpenAI API Key 入力欄
+openai_api_key = st.text_input("OpenAI API Key を入力してください（ページ内容の詳細診断に必要）", type="password")
+if not openai_api_key:
+    st.info("OpenAI API Key を入力すると、ページ内容を読んだ高度な診断が表示されます。")
+
 st.write("URLを入力すると、AI検索時代のコンテンツ適性を簡易スコアリングします。")
 
 urls_text = st.text_area(
