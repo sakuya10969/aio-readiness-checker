@@ -7,6 +7,7 @@ from config import endpoint, deployment, subscription_key
 from extractor import extract_important_sections
 from scorer import calculate_scores
 from analyzer import analyze_page_with_llm, analyze_domain_with_llm, get_llm_scores
+from pdf_generator import markdown_to_pdf
 
 
 # ===== Streamlit アプリ本体 =====
@@ -160,6 +161,26 @@ if st.button("診断する"):
                 row["URL"], row.get("本文要約", ""), scores_dict
             )
             st.markdown(llm_report)
+            
+            # PDF出力ボタン
+            # レポート全体をマークダウン形式で構築
+            report_markdown = f"# {row['URL']}\n\n"
+            report_markdown += "## スコアサマリー\n\n"
+            report_markdown += "\n".join(table_lines) + "\n\n"
+            report_markdown += "## 改善レポート\n\n"
+            report_markdown += llm_report
+            
+            # PDF生成
+            try:
+                pdf_bytes = markdown_to_pdf(report_markdown)
+                st.download_button(
+                    label="PDFレポートをダウンロード",
+                    data=pdf_bytes,
+                    file_name=f"aio_report_{row['URL'].replace('https://', '').replace('http://', '').replace('/', '_')[:50]}.pdf",
+                    mime="application/pdf",
+                )
+            except Exception as e:
+                st.error(f"PDF生成エラー: {e}")
         else:
             st.info(
                 "Azure OpenAI のAPI情報が環境変数に設定されていません。正しいAPIキー情報(.env)をセットしてください。"
