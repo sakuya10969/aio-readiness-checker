@@ -4,8 +4,16 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import pandas as pd
 
-from openai import OpenAI, RateLimitError
+import os
+from openai import AzureOpenAI, RateLimitError
+from dotenv import load_dotenv
 
+# Azure OpenAI のキーとエンドポイントを .env から取得
+load_dotenv()
+endpoint = os.getenv("AZ_OPENAI_ENDPOINT")
+deployment = os.getenv("AZ_OPENAI_DEPLOYMENT")
+subscription_key = os.getenv("AZ_OPENAI_KEY")
+api_version = os.getenv("AZ_OPENAI_API_VERSION", "2025-04-01-preview")
 
 # ===== 重要部分だけ抽出する関数（方法1） =====
 def extract_important_sections(soup: BeautifulSoup) -> str:
@@ -43,9 +51,15 @@ def extract_important_sections(soup: BeautifulSoup) -> str:
 
 
 # ===== LLM による詳細診断 =====
-def analyze_page_with_llm(api_key: str, url: str, page_text: str, scores: dict) -> str:
-    """重要部分とスコアをLLMに渡して、構造化された示唆レポートを生成する"""
-    client = OpenAI(api_key=api_key)
+def analyze_page_with_llm(url: str, page_text: str, scores: dict) -> str:
+    """
+    重要部分とスコアをAzure OpenAIに渡して、構造化された示唆レポートを生成する
+    """
+    client = AzureOpenAI(
+        api_version=api_version,
+        azure_endpoint=endpoint,
+        api_key=subscription_key,
+    )
 
     # 念のためダブルで長さ制限
     short_text = page_text[:3000]
@@ -94,9 +108,9 @@ def analyze_page_with_llm(api_key: str, url: str, page_text: str, scores: dict) 
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            max_completion_tokens=16384,
+            model=deployment,
         )
         return response.choices[0].message.content
 
@@ -104,9 +118,9 @@ def analyze_page_with_llm(api_key: str, url: str, page_text: str, scores: dict) 
         # レートリミットに当たってもアプリを落とさずメッセージを返す
         return (
             "#### ※API利用上限に達しました\n\n"
-            "- OpenAI API のレート制限／利用上限に達している可能性があります。\n"
+            "- Azure OpenAI API のレート制限／利用上限に達している可能性があります。\n"
             "- しばらく時間をおいて再度お試しください。\n"
-            "- 継続利用する場合は、OpenAIダッシュボードの Usage / Billing からクレジット残高をご確認ください。"
+            "- 継続利用する場合は、Azureポータルの Usage / Billing からクレジット残高をご確認ください。"
         )
     except Exception as e:
         return (
@@ -121,17 +135,7 @@ st.set_page_config(page_title="AIO Readiness Checker Demo", layout="wide")
 
 st.title("AIO Readiness Checker（デモ版）")
 
-# OpenAI API Key 入力欄
-openai_api_key = st.text_input(
-    "OpenAI API Key を入力してください（ページ内容の詳細診断に必要）",
-    type="password",
-)
-
-if not openai_api_key:
-    st.info(
-        "※ API Key を入れない場合は、通常のスコア診断のみ表示されます。"
-        "詳細診断（どの部分をどう直すかの具体診断）は表示されません。"
-    )
+# OpenAI API Key 入力欄の削除
 
 st.write("URLを入力すると、AI検索時代のコンテンツ適性を簡易スコアリングします。")
 
@@ -304,12 +308,13 @@ if st.button("診断する"):
         st.markdown("\n".join(table_lines))
 
         # 2) このURL専用の改善レポートをLLMに書かせる
-        if openai_api_key:
+        # Azure OpenAI連携、APIキー欄なしで必ず実施
+        if subscription_key and endpoint and deployment:
             llm_report = analyze_page_with_llm(
-                openai_api_key, row["URL"], row.get("本文要約", ""), scores
+                row["URL"], row.get("本文要約", ""), scores
             )
             st.markdown(llm_report)
         else:
             st.info(
-                "OpenAI API Key を入力すると、このページ内容とスコアに基づいた詳細な改善レポートが表示されます。"
+                "Azure OpenAI のAPI情報が環境変数に設定されていません。正しいAPIキー情報(.env)をセットしてください。"
             )
