@@ -141,16 +141,7 @@ def _check_answerability(soup: BeautifulSoup, full_text: str) -> dict:
         score -= 10
         details.append("テキスト量不足（1000文字未満）")
 
-    score = max(0, min(100, score))
-    return {"score": score, "details": details}
-
-
-def _check_faq_howto(soup: BeautifulSoup, full_text: str) -> dict:
-    """FAQ/HowToの有無を評価"""
-    score = 0
-    details = []
-
-    # キーワード検索
+    # FAQ/HowToの有無（回答性に含める）
     faq_keywords = [
         "よくある質問",
         "FAQ",
@@ -182,10 +173,10 @@ def _check_faq_howto(soup: BeautifulSoup, full_text: str) -> dict:
         ["h1", "h2", "h3"], string=re.compile("FAQ|よくある|質問", re.I)
     )
     if faq_indicators:
-        score += 40
+        score += 15
         details.append("FAQセクション検出")
     elif has_faq_keyword:
-        score += 25
+        score += 10
         details.append("FAQキーワードあり")
 
     # HowToセクション検出
@@ -193,27 +184,11 @@ def _check_faq_howto(soup: BeautifulSoup, full_text: str) -> dict:
         ["h1", "h2", "h3"], string=re.compile("How|使い方|手順|方法", re.I)
     )
     if howto_indicators:
-        score += 40
+        score += 15
         details.append("HowToセクション検出")
     elif has_howto_keyword:
-        score += 25
+        score += 10
         details.append("HowToキーワードあり")
-
-    # 構造化データでのFAQ/HowTo検出
-    ld_scripts = soup.find_all("script", {"type": "application/ld+json"})
-    for script in ld_scripts:
-        try:
-            data = json.loads(script.string)
-            if isinstance(data, dict):
-                schema_type = data.get("@type", "")
-                if "FAQPage" in str(schema_type):
-                    score += 20
-                    details.append("Schema: FAQPage検出")
-                if "HowTo" in str(schema_type):
-                    score += 20
-                    details.append("Schema: HowTo検出")
-        except:
-            pass
 
     score = max(0, min(100, score))
     return {"score": score, "details": details}
@@ -410,13 +385,12 @@ def calculate_scores(
         llm_scores: LLMによる判定スコア（dict、各項目0-100点、None可）
 
     Returns:
-        dict: 各スコア（Crawl/Index健全性、回答性、FAQ/HowTo、E-E-A-T、
+        dict: 各スコア（Crawl/Index健全性、回答性、E-E-A-T、
               構造化データ、コンテンツ一貫性、総合スコア）を含む辞書
     """
     # ルールベース評価
     crawl_index = _check_crawl_index_health(soup, url)
-    answerability = _check_answerability(soup, full_text)
-    faq_howto = _check_faq_howto(soup, full_text)
+    answerability = _check_answerability(soup, full_text)  # FAQ/HowToを含む
     eeat = _check_eeat_proxy(soup, full_text)
     structured = _check_structured_data(soup)
     consistency = _check_content_consistency(soup, full_text)
@@ -434,10 +408,6 @@ def calculate_scores(
             answerability["score"] * rule_weight
             + llm_scores.get("回答性", answerability["score"]) * llm_weight
         )
-        faq_howto_score = round(
-            faq_howto["score"] * rule_weight
-            + llm_scores.get("FAQ/HowTo", faq_howto["score"]) * llm_weight
-        )
         eeat_score = round(
             eeat["score"] * rule_weight
             + llm_scores.get("E-E-A-T", eeat["score"]) * llm_weight
@@ -454,7 +424,6 @@ def calculate_scores(
         # LLMスコアがない場合はルールベースのみ
         crawl_index_score = crawl_index["score"]
         answerability_score = answerability["score"]
-        faq_howto_score = faq_howto["score"]
         eeat_score = eeat["score"]
         structured_score = structured["score"]
         consistency_score = consistency["score"]
@@ -462,18 +431,16 @@ def calculate_scores(
     # 総合スコア（重み付け平均）
     total = round(
         0.20 * crawl_index_score
-        + 0.25 * answerability_score
-        + 0.15 * faq_howto_score
-        + 0.15 * eeat_score
+        + 0.30 * answerability_score  # FAQ/HowToを含む回答性の重みを上げる
+        + 0.20 * eeat_score
         + 0.15 * structured_score
-        + 0.10 * consistency_score
+        + 0.15 * consistency_score
     )
 
     return {
         "Crawl/Index健全性": crawl_index_score,
         "回答性": answerability_score,
-        "FAQ/HowTo": faq_howto_score,
-        "E-E-A-T": eeat_score,
+        "信頼性": eeat_score,
         "構造化データ": structured_score,
         "コンテンツ一貫性": consistency_score,
         "総合スコア": total,
