@@ -17,73 +17,97 @@ st.title("AIO Readiness Checker（デモ版）")
 
 st.write("URLを入力すると、AI検索時代のコンテンツ適性を簡易スコアリングします。")
 
+# セッション状態の初期化
+if "results" not in st.session_state:
+    st.session_state.results = []
+if "urls_text" not in st.session_state:
+    st.session_state.urls_text = ""
+if "llm_reports" not in st.session_state:
+    st.session_state.llm_reports = {}  # URLをキーとしたレポートの辞書
+
 urls_text = st.text_area(
     "診断したいURL（1行に1つ）",
     placeholder="https://example.com",
     height=120,
+    value=st.session_state.urls_text,
+    key="urls_input",
 )
 
 if st.button("診断する"):
+    # 入力したURLをセッション状態に保存
+    st.session_state.urls_text = urls_text
+    # 新しい診断開始時は古いレポートをクリア
+    st.session_state.llm_reports = {}
     urls = [u.strip() for u in urls_text.splitlines() if u.strip()]
     results = []
+    
+    # 診断中メッセージを表示
+    with st.spinner("診断中..."):
+        for url in urls:
+            try:
+                resp = requests.get(
+                    url,
+                    timeout=10,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                html = resp.text
+                soup = BeautifulSoup(html, "html.parser")
+            except Exception as e:
+                results.append(
+                    {
+                        "URL": url,
+                        "ステータス": f"取得失敗: {e}",
+                        "総合スコア": 0,
+                        "Crawl/Index健全性": 0,
+                        "回答性": 0,
+                        "信頼性": 0,
+                        "構造化データ": 0,
+                        "コンテンツ一貫性": 0,
+                        "本文要約": "",
+                    }
+                )
+                continue
 
-    for url in urls:
-        try:
-            resp = requests.get(
-                url,
-                timeout=10,
-                headers={"User-Agent": "Mozilla/5.0"},
-            )
-            html = resp.text
-            soup = BeautifulSoup(html, "html.parser")
-        except Exception as e:
+            # ページ本文（全文）
+            full_text = soup.get_text(separator=" ", strip=True)
+
+            # AIO観点で重要な部分だけ抽出（見出し＋直後の段落）
+            important_text = extract_important_sections(soup)
+
+            # LLMによるスコア判定（オプション）
+            llm_scores = {}
+            if subscription_key and endpoint and deployment:
+                try:
+                    llm_scores = get_llm_scores(url, important_text)
+                except Exception:
+                    # LLMエラー時はルールベースのみで継続
+                    pass
+
+            # スコア計算（ルールベース70% + LLM判定30%）
+            scores = calculate_scores(url, soup, full_text, llm_scores)
+
             results.append(
                 {
                     "URL": url,
-                    "ステータス": f"取得失敗: {e}",
-                    "総合スコア": 0,
-                    "Crawl/Index健全性": 0,
-                    "回答性": 0,
-                    "信頼性": 0,
-                    "構造化データ": 0,
-                    "コンテンツ一貫性": 0,
-                    "本文要約": "",
+                    "ステータス": "OK",
+                    "総合スコア": scores["総合スコア"],
+                    "Crawl/Index健全性": scores["Crawl/Index健全性"],
+                    "回答性": scores["回答性"],
+                    "信頼性": scores["信頼性"],
+                    "構造化データ": scores["構造化データ"],
+                    "コンテンツ一貫性": scores["コンテンツ一貫性"],
+                    "本文要約": important_text,  # LLM にはこちらを渡す
                 }
             )
-            continue
+    
+    # 診断結果をセッション状態に保存
+    st.session_state.results = results
 
-        # ページ本文（全文）
-        full_text = soup.get_text(separator=" ", strip=True)
+# セッション状態から結果を取得
+results = st.session_state.results
 
-        # AIO観点で重要な部分だけ抽出（見出し＋直後の段落）
-        important_text = extract_important_sections(soup)
-
-        # LLMによるスコア判定（オプション）
-        llm_scores = {}
-        if subscription_key and endpoint and deployment:
-            try:
-                llm_scores = get_llm_scores(url, important_text)
-            except Exception:
-                # LLMエラー時はルールベースのみで継続
-                pass
-
-        # スコア計算（ルールベース70% + LLM判定30%）
-        scores = calculate_scores(url, soup, full_text, llm_scores)
-
-        results.append(
-            {
-                "URL": url,
-                "ステータス": "OK",
-                "総合スコア": scores["総合スコア"],
-                "Crawl/Index健全性": scores["Crawl/Index健全性"],
-                "回答性": scores["回答性"],
-                "信頼性": scores["信頼性"],
-                "構造化データ": scores["構造化データ"],
-                "コンテンツ一貫性": scores["コンテンツ一貫性"],
-                "本文要約": important_text,  # LLM にはこちらを渡す
-            }
-        )
-
+# 結果がある場合のみ表示
+if results:
     # 結果テーブル（本文要約列は隠す）
     df = pd.DataFrame(results)
     if "本文要約" in df.columns:
@@ -153,9 +177,16 @@ if st.button("診断する"):
         # 2) このURL専用の改善レポートをLLMに書かせる
         # Azure OpenAI連携、APIキー欄なしで必ず実施
         if subscription_key and endpoint and deployment:
-            llm_report = analyze_page_with_llm(
-                row["URL"], row.get("本文要約", ""), scores_dict
-            )
+            # セッション状態に既にレポートがある場合はそれを使用
+            url_key = row["URL"]
+            if url_key in st.session_state.llm_reports:
+                llm_report = st.session_state.llm_reports[url_key]
+            else:
+                # レポートを生成してセッション状態に保存
+                llm_report = analyze_page_with_llm(
+                    row["URL"], row.get("本文要約", ""), scores_dict
+                )
+                st.session_state.llm_reports[url_key] = llm_report
             st.markdown(llm_report)
             
             # PDF出力ボタン
