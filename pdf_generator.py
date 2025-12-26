@@ -117,17 +117,26 @@ class MarkdownToPDF(FPDF):
         if len(table_lines) < 2:
             return
         
-        # ヘッダー行とセパレータ行をスキップ
-        header = table_lines[0]
-        if len(table_lines) > 1 and table_lines[1].strip().startswith("|---"):
-            data_rows = table_lines[2:]
-        else:
-            data_rows = table_lines[1:]
-        
         # セルを分割
         def parse_row(row: str) -> list:
             cells = [cell.strip() for cell in row.split("|") if cell.strip()]
             return cells
+        
+        # セパレータ行かどうかを判定する関数
+        def is_separator_row(row: str) -> bool:
+            """行がセパレータ行（すべてのセルが `-` のみで構成）かどうかを判定"""
+            cells = parse_row(row)
+            if not cells:
+                return False
+            # すべてのセルが `-` のみで構成されているかチェック
+            return all(re.match(r'^[\s\-:]+$', cell) for cell in cells)
+        
+        # ヘッダー行とセパレータ行をスキップ
+        header = table_lines[0]
+        if len(table_lines) > 1 and is_separator_row(table_lines[1]):
+            data_rows = table_lines[2:]
+        else:
+            data_rows = table_lines[1:]
         
         header_cells = parse_row(header)
         if not header_cells:
@@ -152,8 +161,14 @@ class MarkdownToPDF(FPDF):
         
         # データ行
         for row in data_rows:
+            # セパレータ行が混入していないかチェック
+            if is_separator_row(row):
+                continue
             cells = parse_row(row)
             if len(cells) != len(header_cells):
+                continue
+            # すべてのセルが空の場合はスキップ
+            if all(not cell.strip() for cell in cells):
                 continue
             for cell in cells:
                 # マークダウン記号を除去
